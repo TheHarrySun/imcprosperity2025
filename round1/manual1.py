@@ -13,6 +13,8 @@ say:
 - index 3 is seashells
 in the exchange matrix, exchange[i][j] is the exchange rate for one of i to j
 '''
+prods = ['snowball', 'pizza', 'silicon nugget', 'seashell']
+
 exchange = []
 snowball_exchanges = [1, 1.45, 0.52, 0.72]
 pizza_exchanges = [0.7, 1, 0.31, 0.48]
@@ -34,7 +36,7 @@ for i in range(0, MAX_TRADES):
             max_array[i, j] = 500 * exchange[3, j]
             back_track[i, j] = -1
         elif (i == 4 and j != 3):
-            continue
+            back_track[i, j] = -1
         else:
             for k in range(0, NUM_PRODS):
                 if (max_array[i, j] < max_array[i-1, k] * exchange[k, j]):                
@@ -53,3 +55,10 @@ for i in range(MAX_TRADES - 1, -1, -1):
         
 for i in range(len(backtrack_seq) - 1, -1, -1):
     print(backtrack_seq[i])
+    
+for i in range(len(backtrack_seq) - 1, -1, -1):
+    if (backtrack_seq[i] == -1):
+        print("seashells -> ", end="")
+    else:
+        print(prods[int(backtrack_seq[i])], "-> ", end = "")
+print("seashells")
