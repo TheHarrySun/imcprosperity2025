@@ -8,6 +8,14 @@ class Product:
     INK = "SQUID_INK"
     KELP = "KELP"
 
+
 class Trader:
+    def __init__(self):
+        self.LIMIT = {
+            Product.RESIN: 20,
+            Product.INK: 20,
+            Product.KELP: 20
+        }
+        
     def run(self, state: TradingState):
         pass
