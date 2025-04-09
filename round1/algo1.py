@@ -31,31 +31,41 @@ class Trader:
         prod_limit = self.LIMIT[product]
         
         if len(order_depth.sell_orders) != 0:
-            best_ask = min(order_depth.sell_orders.keys())
-            best_ask_amt = -1 * order_depth.sell_orders[best_ask]
-            
-            if (best_ask <= fair_value - take_width):
-                quantity = min(best_ask_amt, prod_limit - position)
-                if quantity > 0:
-                    orders.append(Order(product, best_ask, quantity))
-                    buy_order_volume += quantity
-                    order_depth.sell_orders[best_ask] += quantity
-                    if order_depth.sell_orders[best_ask] == 0:
-                        del order_depth.sell_orders[best_ask]
+            while (True):
+                best_ask = min(order_depth.sell_orders.keys())
+                best_ask_amt = -1 * order_depth.sell_orders[best_ask]
+
+                if (best_ask <= fair_value - take_width):
+                    quantity = min(best_ask_amt, prod_limit - position)
+                    if quantity > 0:
+                        orders.append(Order(product, best_ask, quantity))
+                        buy_order_volume += quantity
+                        order_depth.sell_orders[best_ask] += quantity
+                        if order_depth.sell_orders[best_ask] == 0:
+                            del order_depth.sell_orders[best_ask]
+                    else:
+                        break
+                else:
+                    break
             
         if len(order_depth.buy_orders) != 0:
-            best_bid = max(order_depth.buy_orders.keys())
-            best_bid_amt = order_depth.buy_orders[best_bid]
+            while (True):
+                best_bid = max(order_depth.buy_orders.keys())
+                best_bid_amt = order_depth.buy_orders[best_bid]
             
-            if best_bid >= fair_value + take_width:
-                quantity = min(best_bid_amt, prod_limit + position)
+                if best_bid >= fair_value + take_width:
+                    quantity = min(best_bid_amt, prod_limit + position)
                 
-                if quantity > 0:
-                    orders.append(Order(product, best_bid, -1 * quantity))
-                    sell_order_volume += quantity
-                    order_depth.buy_orders[best_bid] -= quantity
-                    if order_depth.buy_orders[best_bid] == 0:
-                        del order_depth.buy_orders[best_bid]
+                    if quantity > 0:
+                        orders.append(Order(product, best_bid, -1 * quantity))
+                        sell_order_volume += quantity
+                        order_depth.buy_orders[best_bid] -= quantity
+                        if order_depth.buy_orders[best_bid] == 0:
+                            del order_depth.buy_orders[best_bid]
+                    else:
+                        break
+                else:
+                    break
         
         return buy_order_volume, sell_order_volume
         
