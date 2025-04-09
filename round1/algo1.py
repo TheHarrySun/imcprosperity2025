@@ -149,7 +149,7 @@ class Trader:
         result = {}
         
         resin_fair_value = 10000
-        resin_take_width = 1
+        resin_take_width = 0.5
         
         if Product.RESIN in state.order_depths:
             resin_position = state.position[Product.RESIN] if Product.RESIN in state.position else 0
