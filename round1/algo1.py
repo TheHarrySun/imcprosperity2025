@@ -8,6 +8,17 @@ class Product:
     INK = "SQUID_INK"
     KELP = "KELP"
 
+PARAMS = {
+    Product.RESIN: {
+        "fair_value": 10000,
+        "take_width": 1
+    },
+    Product.INK: {
+        "take_width": 2,
+        "prevent_adverse": True,
+        "adverse_volume": 15
+    }
+}
 
 class Trader:
     def __init__(self):
@@ -16,7 +27,6 @@ class Trader:
             Product.INK: 50,
             Product.KELP: 50
         }
-        self.PARAMS = {}
         
     def take_best_orders(
         self, 
@@ -27,7 +37,9 @@ class Trader:
         order_depth: OrderDepth,
         position: int,
         buy_order_volume: int,
-        sell_order_volume: int
+        sell_order_volume: int,
+        prevent_adverse: bool = False,
+        adverse_volume: int = 0
     ) -> Tuple[int, int]:
         prod_limit = self.LIMIT[product]
         
@@ -35,38 +47,70 @@ class Trader:
             while (True):
                 best_ask = min(order_depth.sell_orders.keys())
                 best_ask_amt = -1 * order_depth.sell_orders[best_ask]
-
-                if (best_ask <= fair_value - take_width):
-                    quantity = min(best_ask_amt, prod_limit - position)
-                    if quantity > 0:
-                        orders.append(Order(product, best_ask, quantity))
-                        buy_order_volume += quantity
-                        order_depth.sell_orders[best_ask] += quantity
-                        if order_depth.sell_orders[best_ask] == 0:
-                            del order_depth.sell_orders[best_ask]
+                if (prevent_adverse):
+                    if best_ask <= fair_value - take_width:
+                        quantity = min(adverse_volume, min(best_ask_amt, prod_limit - position))
+                        if quantity > 0:
+                            orders.append(Order(product, best_ask, quantity))
+                            buy_order_volume += quantity
+                            order_depth.sell_orders[best_ask] += quantity
+                            if order_depth.sell_orders[best_ask] == 0:
+                                del order_depth.sell_orders[best_ask]
+                            if buy_order_volume > adverse_volume:
+                                break
+                        else:
+                            break
+                    else: 
+                        break                    
+                else:
+                    if (best_ask <= fair_value - take_width):
+                        quantity = min(best_ask_amt, prod_limit - position)
+                        if quantity > 0:
+                            orders.append(Order(product, best_ask, quantity))
+                            buy_order_volume += quantity
+                            order_depth.sell_orders[best_ask] += quantity
+                            if order_depth.sell_orders[best_ask] == 0:
+                                del order_depth.sell_orders[best_ask]
+                        else:
+                            break
                     else:
                         break
-                else:
-                    break
             
         if len(order_depth.buy_orders) != 0:
             while (True):
                 best_bid = max(order_depth.buy_orders.keys())
                 best_bid_amt = order_depth.buy_orders[best_bid]
-            
-                if best_bid >= fair_value + take_width:
-                    quantity = min(best_bid_amt, prod_limit + position)
-                
-                    if quantity > 0:
-                        orders.append(Order(product, best_bid, -1 * quantity))
-                        sell_order_volume += quantity
-                        order_depth.buy_orders[best_bid] -= quantity
-                        if order_depth.buy_orders[best_bid] == 0:
-                            del order_depth.buy_orders[best_bid]
+                if prevent_adverse:
+                    if best_bid >= fair_value + take_width:
+                        quantity = min(adverse_volume, min(best_bid_amt, prod_limit + position))
+                        if quantity > 0:
+                            orders.append(Order(product, best_bid, -1 * quantity))
+                            sell_order_volume += quantity
+                            order_depth.buy_orders[best_bid] += quantity
+                            if order_depth.buy_orders[best_bid] == 0:
+                                del order_depth.buy_orders[best_bid]
+                            if sell_order_volume > adverse_volume:
+                                break
+                        else:
+                            break 
+                    else:
+                        break   
+                        
+
+                else:
+                    if best_bid >= fair_value + take_width:
+                        quantity = min(best_bid_amt, prod_limit + position)
+
+                        if quantity > 0:
+                            orders.append(Order(product, best_bid, -1 * quantity))
+                            sell_order_volume += quantity
+                            order_depth.buy_orders[best_bid] -= quantity
+                            if order_depth.buy_orders[best_bid] == 0:
+                                del order_depth.buy_orders[best_bid]
+                        else:
+                            break
                     else:
                         break
-                else:
-                    break
         
         return buy_order_volume, sell_order_volume
         
@@ -162,10 +206,10 @@ class Trader:
         return None
 
     def ink_orders(
-                self, 
+        self, 
         order_depth: OrderDepth, 
         fair_value: int, 
-        width: int, 
+        width: int,
         position: int
     ) -> List[Order]:
         
@@ -179,7 +223,7 @@ class Trader:
         baaf = min(aaf) if len(aaf) > 0 else fair_value + 2
         bbbf = max(bbf) if len(bbf) > 0 else fair_value - 2
         
-        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, width, orders, order_depth, position, buy_order_volume, sell_order_volume)
+        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, width, orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
         buy_order_volume, sell_order_volume = self.clear_position_order(product, fair_value, orders, order_depth, position, buy_order_volume, sell_order_volume)
         buy_order_volume, sell_order_volume = self.market_make(product, orders, bbbf + 1, baaf - 1, position, buy_order_volume, sell_order_volume)
         
@@ -193,13 +237,13 @@ class Trader:
         
         if Product.RESIN in state.order_depths:
             resin_position = state.position[Product.RESIN] if Product.RESIN in state.position else 0
-            resin_orders = self.resin_orders(state.order_depths[Product.RESIN], resin_fair_value, resin_take_width, resin_position)
+            resin_orders = self.resin_orders(state.order_depths[Product.RESIN], PARAMS[Product.RESIN]["fair_value"], PARAMS[Product.RESIN]["take_width"], resin_position)
             result[Product.RESIN] = resin_orders
             
         if Product.INK in state.order_depths:
             ink_position = state.position[Product.INK] if Product.INK in state.position else 0
-            ink_fair_value = self.ink_fair_value(state.order_depth[Product.INK])
-            ink_orders = self.ink_orders(state.order_depths[Product.INK], ink_fair_value, 1, ink_position)
+            ink_fair_value = self.ink_fair_value(state.order_depths[Product.INK])
+            ink_orders = self.ink_orders(state.order_depths[Product.INK], ink_fair_value, PARAMS[Product.INK]["take_width"], ink_position)
             result[Product.INK] = ink_orders
             
         traderData = "SAMPLE" # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
