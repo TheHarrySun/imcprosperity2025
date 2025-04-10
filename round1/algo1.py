@@ -2,6 +2,7 @@ from datamodel import OrderDepth, Order, UserId, TradingState
 from typing import List, Tuple
 import string
 import math
+import numpy as np
 
 class Product:
     RESIN = "RAINFOREST_RESIN"
@@ -182,7 +183,8 @@ class Trader:
     ) -> List[Order]:
         
         orders: List[Order] = []
-        
+        if (fair_value == None):
+            return orders
         buy_order_volume = 0
         sell_order_volume = 0
         product = Product.RESIN
@@ -195,7 +197,7 @@ class Trader:
         
         return orders
     
-    def fair_value(self, product: str, order_depth: OrderDepth) -> float:
+    def mm_fair_value(self, product: str, order_depth: OrderDepth) -> float:
         order_depth = order_depth[product]
         if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
             best_ask = min(order_depth.sell_orders.keys())
@@ -210,6 +212,21 @@ class Trader:
             mmid_price = (mm_ask + mm_bid) / 2
             return mmid_price
         return None
+    '''
+    def weight_fair_value(self, product: str, order_depth: OrderDepth) -> float:
+        order_depth = order_depth[product]
+        if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
+            best_ask = min(order_depth.sell_orders.keys())
+            best_bid = max(order_depth.buy_orders.keys())
+            
+            ask_vol = abs(order_depth.sell_orders[best_ask])
+            bid_vol = abs(order_depth.buy_orders[best_bid])
+            volume = ask_vol + bid_vol
+            
+            vwap = (best_bid * ask_vol + best_ask * bid_vol) / volume
+            return vwap
+        return None
+    ''' 
 
     def ink_orders(
         self, 
@@ -220,7 +237,8 @@ class Trader:
     ) -> List[Order]:
         
         orders: List[Order] = []
-        
+        if (fair_value == None):
+            return orders
         buy_order_volume = 0
         sell_order_volume = 0
         product = Product.INK
@@ -229,7 +247,12 @@ class Trader:
         baaf = min(aaf) if len(aaf) > 0 else fair_value + 2
         bbbf = max(bbf) if len(bbf) > 0 else fair_value - 2
         
-        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, width, orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
+        best_ask = min(order_depth.sell_orders.keys())
+        best_bid = max(order_depth.buy_orders.keys())
+        volatility = abs(best_ask - best_bid)
+        dynamic_take_width = max(1, volatility * 0.25)
+        
+        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, dynamic_take_width, orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
         buy_order_volume, sell_order_volume = self.clear_position_order(product, fair_value, orders, order_depth, position, buy_order_volume, sell_order_volume)
         buy_order_volume, sell_order_volume = self.market_make(product, orders, bbbf + 1, baaf - 1, position, buy_order_volume, sell_order_volume)
         
@@ -239,12 +262,12 @@ class Trader:
         self, 
         order_depth: OrderDepth, 
         fair_value: int, 
-        width: int,
         position: int
     ) -> List[Order]:
         
         orders: List[Order] = []
-        
+        if (fair_value == None):
+            return orders
         buy_order_volume = 0
         sell_order_volume = 0
         product = Product.KELP
@@ -253,7 +276,12 @@ class Trader:
         baaf = min(aaf) if len(aaf) > 0 else fair_value + 2
         bbbf = max(bbf) if len(bbf) > 0 else fair_value - 2
         
-        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, width, orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
+        best_ask = min(order_depth.sell_orders.keys())
+        best_bid = max(order_depth.buy_orders.keys())
+        volatility = abs(best_ask - best_bid)
+        dynamic_take_width = max(1, volatility * 0.25)
+        
+        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, dynamic_take_width, orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
         buy_order_volume, sell_order_volume = self.clear_position_order(product, fair_value, orders, order_depth, position, buy_order_volume, sell_order_volume)
         buy_order_volume, sell_order_volume = self.market_make(product, orders, bbbf + 1, baaf - 1, position, buy_order_volume, sell_order_volume)
         
@@ -266,17 +294,21 @@ class Trader:
             resin_position = state.position[Product.RESIN] if Product.RESIN in state.position else 0
             resin_orders = self.resin_orders(state.order_depths[Product.RESIN], PARAMS[Product.RESIN]["fair_value"], PARAMS[Product.RESIN]["take_width"], resin_position)
             result[Product.RESIN] = resin_orders
-            
+                    
         if Product.INK in state.order_depths:
             ink_position = state.position[Product.INK] if Product.INK in state.position else 0
-            ink_fair_value = self.fair_value(Product.INK, state.order_depths)
+            ink_fair_value = self.mm_fair_value(Product.INK, state.order_depths)
+            # ink_fair_value = self.weight_fair_value(Product.INK, state.order_depths)            
+
             ink_orders = self.ink_orders(state.order_depths[Product.INK], ink_fair_value, PARAMS[Product.INK]["take_width"], ink_position)
             result[Product.INK] = ink_orders
-            
+
         if Product.KELP in state.order_depths:
             kelp_position = state.position[Product.KELP] if Product.KELP in state.position else 0
-            kelp_fair_value = self.fair_value(Product.KELP, state.order_depths)
-            kelp_orders = self.kelp_orders(state.order_depths[Product.KELP], kelp_fair_value, PARAMS[Product.KELP]["take_width"], kelp_position)
+            kelp_fair_value = self.mm_fair_value(Product.KELP, state.order_depths)
+            # kelp_fair_value = self.weight_fair_value(Product.KELP, state.order_depths)
+            
+            kelp_orders = self.kelp_orders(state.order_depths[Product.KELP], kelp_fair_value, kelp_position)
             result[Product.KELP] = kelp_orders
             
         traderData = "SAMPLE" # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
