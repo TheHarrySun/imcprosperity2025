@@ -16,6 +16,7 @@ class Trader:
             Product.INK: 50,
             Product.KELP: 50
         }
+        self.PARAMS = {}
         
     def take_best_orders(
         self, 
@@ -144,7 +145,46 @@ class Trader:
         buy_order_volume, sell_order_volume = self.market_make(product, orders, fair_bid, fair_ask, position, buy_order_volume, sell_order_volume)
         
         return orders
-             
+    
+    def ink_fair_value(self, order_depth: OrderDepth) -> float:
+        if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
+            best_ask = min(order_depth.sell_orders.keys())
+            best_bid = max(order_depth.buy_orders.keys())
+            
+            filtered_ask = [price for price in order_depth.sell_orders.keys() if abs(order_depth.sell_orders[price]) >= 15]
+            filtered_bid = [price for price in order_depth.buy_orders.keys() if abs(order_depth.buy_orders[price]) >= 15]
+            
+            mm_ask = min(filtered_ask) if len(filtered_ask) > 0 else best_ask
+            mm_bid = max(filtered_bid) if len(filtered_bid) > 0 else best_bid
+            
+            mmid_price = (mm_ask + mm_bid) / 2
+            return mmid_price
+        return None
+
+    def ink_orders(
+                self, 
+        order_depth: OrderDepth, 
+        fair_value: int, 
+        width: int, 
+        position: int
+    ) -> List[Order]:
+        
+        orders: List[Order] = []
+        
+        buy_order_volume = 0
+        sell_order_volume = 0
+        product = Product.INK
+        aaf = [price for price in order_depth.sell_orders.keys() if price > fair_value + 1]
+        bbf = [price for price in order_depth.buy_orders.keys() if price < fair_value - 1]
+        baaf = min(aaf) if len(aaf) > 0 else fair_value + 2
+        bbbf = max(bbf) if len(bbf) > 0 else fair_value - 2
+        
+        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, width, orders, order_depth, position, buy_order_volume, sell_order_volume)
+        buy_order_volume, sell_order_volume = self.clear_position_order(product, fair_value, orders, order_depth, position, buy_order_volume, sell_order_volume)
+        buy_order_volume, sell_order_volume = self.market_make(product, orders, bbbf + 1, baaf - 1, position, buy_order_volume, sell_order_volume)
+        
+        return orders
+    
     def run(self, state: TradingState):
         result = {}
         
@@ -155,8 +195,13 @@ class Trader:
             resin_position = state.position[Product.RESIN] if Product.RESIN in state.position else 0
             resin_orders = self.resin_orders(state.order_depths[Product.RESIN], resin_fair_value, resin_take_width, resin_position)
             result[Product.RESIN] = resin_orders
-    
-    
+            
+        if Product.INK in state.order_depths:
+            ink_position = state.position[Product.INK] if Product.INK in state.position else 0
+            ink_fair_value = self.ink_fair_value(state.order_depth[Product.INK])
+            ink_orders = self.ink_orders(state.order_depths[Product.INK], ink_fair_value, 1, ink_position)
+            result[Product.INK] = ink_orders
+            
         traderData = "SAMPLE" # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
         
         conversions = 1
