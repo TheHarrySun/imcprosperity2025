@@ -125,10 +125,21 @@ class Logger:
 
 logger = Logger()
 
+
+
+
+
+
+
 class Product:
     RESIN = "RAINFOREST_RESIN"
     INK = "SQUID_INK"
     KELP = "KELP"
+    CROISSANTS = "CROISSANTS"
+    JAMS = "JAMS"
+    DJEMBES = "DJEMBES"
+    PIC1 = "PICNIC_BASKET1"
+    PIC2 = "PICNIC_BASKET2"
 
 PARAMS = {
     Product.RESIN: {
@@ -152,7 +163,12 @@ class Trader:
         self.LIMIT = {
             Product.RESIN: 50,
             Product.INK: 50,
-            Product.KELP: 50
+            Product.KELP: 50,
+            Product.CROISSANTS: 250,
+            Product.JAMS: 350,
+            Product.DJEMBES: 60,
+            Product.PIC1: 60,
+            Product.PIC2: 100
         }
         
     def take_best_orders(
