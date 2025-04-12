@@ -144,17 +144,42 @@ class Product:
 PARAMS = {
     Product.RESIN: {
         "fair_value": 10000,
-        "take_width": 0.25
+        "take_width": 1
     },
     Product.INK: {
-        "take_width": 2,
+        # "take_width": 0.5,
         "prevent_adverse": True,
-        "adverse_volume": 17
+        "adverse_volume": 20
     },
     Product.KELP: {
-        "take_width": 2,
+        "take_width": 1,
         "prevent_adverse": True,
-        "adverse_volume": 18
+        "adverse_volume": 20
+    },
+    Product.PIC1: {
+        "num_croissants": 6,
+        "num_jams": 3,
+        "num_djembes": 1
+    },
+    Product.PIC2: {
+        "num_croissants": 4,
+        "num_jams": 2,
+        "num_djembes": 0
+    },
+    Product.CROISSANTS: {
+        "take_width": 1,
+        "prevent_adverse": True,
+        "adverse_volume": 25
+    },
+    Product.JAMS: {
+        "take_width": 1,
+        "prevent_adverse": True,
+        "adverse_volume": 25
+    },
+    Product.DJEMBES: {
+        "take_width": 1,
+        "prevent_adverse": True,
+        "adverse_volume": 25
     }
 }
 
@@ -170,6 +195,8 @@ class Trader:
             Product.PIC1: 60,
             Product.PIC2: 100
         }
+        self.ink_prices = []
+        self.INK_LOOKBACK = 10
         
     def take_best_orders(
         self, 
@@ -326,8 +353,10 @@ class Trader:
         sell_order_volume = 0
         product = Product.RESIN
         
-        fair_ask = min([price for price in order_depth.sell_orders.keys() if price > fair_value + 0.5])
-        fair_bid = max([price for price in order_depth.buy_orders.keys() if price < fair_value - 0.5])
+        fair_ask = [price for price in order_depth.sell_orders.keys() if price > fair_value + 1]
+        fair_ask = fair_value + 1 if len(fair_ask) == 0 else min(fair_ask)
+        fair_bid = [price for price in order_depth.buy_orders.keys() if price < fair_value - 1]
+        fair_bid = fair_value - 1 if len(fair_bid) == 0 else min(fair_bid)
         buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, width, orders, order_depth, position, buy_order_volume, sell_order_volume)
         buy_order_volume, sell_order_volume = self.clear_position_order(product, fair_value, orders, order_depth, position, buy_order_volume, sell_order_volume)
         buy_order_volume, sell_order_volume = self.market_make(product, orders, fair_bid, fair_ask, position, buy_order_volume, sell_order_volume)
@@ -349,6 +378,21 @@ class Trader:
             return mmid_price
         return None
     
+    def ink_fair_value(self, order_depth: OrderDepth) -> float:
+        mmid_price = 0
+        if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
+            best_ask = min(order_depth.sell_orders.keys())
+            best_bid = max(order_depth.buy_orders.keys())
+            mmid_price = (best_ask + best_bid) / 2
+        
+        if len(self.ink_prices) == 0:
+            self.ink_prices.append(mmid_price)
+            return mmid_price
+        else:
+            if len(self.ink_prices) == self.INK_LOOKBACK:
+                self.ink_prices.append(mmid_price)
+                self.ink_prices.pop(0)
+                return np.array(self.ink_prices).mean()
     # tried using the weighted fair values and it didn't seem to perform as well as mid price
     '''
     def weight_fair_value(self, product: str, order_depth: OrderDepth) -> float:
@@ -379,10 +423,10 @@ class Trader:
         buy_order_volume = 0
         sell_order_volume = 0
         product = Product.INK
-        aaf = [price for price in order_depth.sell_orders.keys() if price > fair_value + 1.5]
-        bbf = [price for price in order_depth.buy_orders.keys() if price < fair_value - 1.5]
-        baaf = min(aaf) if len(aaf) > 0 else fair_value + 2
-        bbbf = max(bbf) if len(bbf) > 0 else fair_value - 2
+        aaf = [price for price in order_depth.sell_orders.keys() if price > fair_value + 1]
+        bbf = [price for price in order_depth.buy_orders.keys() if price < fair_value - 1]
+        baaf = min(aaf) if len(aaf) > 0 else fair_value + 1
+        bbbf = max(bbf) if len(bbf) > 0 else fair_value - 1
         
         best_ask = min(order_depth.sell_orders.keys())
         best_bid = max(order_depth.buy_orders.keys())
@@ -408,8 +452,8 @@ class Trader:
         buy_order_volume = 0
         sell_order_volume = 0
         product = Product.KELP
-        aaf = [price for price in order_depth.sell_orders.keys() if price > fair_value + 1.5]
-        bbf = [price for price in order_depth.buy_orders.keys() if price < fair_value - 1.5]
+        aaf = [price for price in order_depth.sell_orders.keys() if price > fair_value + 1]
+        bbf = [price for price in order_depth.buy_orders.keys() if price < fair_value - 1]
         baaf = min(aaf) if len(aaf) > 0 else fair_value + 2
         bbbf = max(bbf) if len(bbf) > 0 else fair_value - 2
         
@@ -418,7 +462,7 @@ class Trader:
         volatility = abs(best_ask - best_bid)
         dynamic_take_width = max(1, volatility * 0.25)
         
-        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, dynamic_take_width, orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
+        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, PARAMS[Product.KELP]["take_width"], orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
         buy_order_volume, sell_order_volume = self.clear_position_order(product, fair_value, orders, order_depth, position, buy_order_volume, sell_order_volume)
         buy_order_volume, sell_order_volume = self.market_make(product, orders, bbbf + 0.5, baaf - 0.5, position, buy_order_volume, sell_order_volume)
         
@@ -449,6 +493,10 @@ class Trader:
             kelp_orders = self.kelp_orders(state.order_depths[Product.KELP], kelp_fair_value, kelp_position)
             result[Product.KELP] = kelp_orders
             
+        if Product.PIC1 in state.order_depths:
+            pic1_position = state.position[Product.pic1] if Product.PIC1 in state.position else 0
+            # kelp_fair_value = self.weight_fair_value(Product.KELP, state.order_depths)
+                        
         traderData = "" # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
         
         conversions = 1
