@@ -2,8 +2,8 @@ from typing import List, Tuple
 import string
 import math
 import numpy as np
-
 import json
+import jsonpickle
 from typing import Any
 
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
@@ -195,8 +195,6 @@ class Trader:
             Product.PIC1: 60,
             Product.PIC2: 100
         }
-        self.ink_prices = []
-        self.INK_LOOKBACK = 10
         
     def take_best_orders(
         self, 
@@ -378,25 +376,38 @@ class Trader:
             return mmid_price
         return None
     
-    def ink_fair_value(self, order_depth: OrderDepth) -> float:
-        mmid_price = 0
+    def ink_fair_value(self, order_depth: OrderDepth, traderObject) -> float:
         if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
             best_ask = min(order_depth.sell_orders.keys())
             best_bid = max(order_depth.buy_orders.keys())
-            mmid_price = (best_ask + best_bid) / 2
-        
-        if len(self.ink_prices) == 0:
-            self.ink_prices.append(mmid_price)
-            return mmid_price
-        else:
-            if len(self.ink_prices) == self.INK_LOOKBACK:
-                self.ink_prices.append(mmid_price)
-                self.ink_prices.pop(0)
-                return np.array(self.ink_prices).mean()
+            
+            filtered_ask = [price for price in order_depth.sell_orders.keys() if abs(order_depth.sell_orders[price]) >= PARAMS[Product.INK]["adverse_volume"]]
+            filtered_bid = [price for price in order_depth.buy_orders.keys() if abs(order_depth.buy_orders[price]) >= PARAMS[Product.INK]["adverse_volume"]]
+            
+            mm_ask = min(filtered_ask) if len(filtered_ask) > 0 else best_ask
+            mm_bid = max(filtered_bid) if len(filtered_bid) > 0 else best_bid
+            
+            if mm_ask == None or mm_bid == None:
+                if traderObject.get("ink_last_price", None) == None:
+                    mmid_price = (best_ask + best_bid) / 2
+                else:
+                    mmid_price = traderObject["ink_last_price"]
+            else:
+                mmid_price = (mm_ask + mm_bid) / 2
+
+            if traderObject.get("ink_last_price", None) != None:
+                last_price = traderObject["ink_last_price"]
+                last_returns = (mmid_price - last_price) / last_price
+                pred_returns = last_returns * (-0.229)
+                fair = mmid_price + (mmid_price * pred_returns)
+            else:
+                fair = mmid_price
+            traderObject["ink_last_price"] = mmid_price
+            return fair
+        return None
     # tried using the weighted fair values and it didn't seem to perform as well as mid price
-    '''
-    def weight_fair_value(self, product: str, order_depth: OrderDepth) -> float:
-        order_depth = order_depth[product]
+    
+    def weight_fair_value(self, order_depth: OrderDepth) -> float:
         if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
             best_ask = min(order_depth.sell_orders.keys())
             best_bid = max(order_depth.buy_orders.keys())
@@ -408,7 +419,7 @@ class Trader:
             vwap = (best_bid * ask_vol + best_ask * bid_vol) / volume
             return vwap
         return None
-    ''' 
+     
 
     def ink_orders(
         self, 
@@ -469,6 +480,9 @@ class Trader:
         return orders
     
     def run(self, state: TradingState):
+        traderObject = {}
+        if state.traderData != None and state.traderData != "":
+            traderObject = jsonpickle.decode(state.traderData)
         result = {}
         
         if Product.RESIN in state.order_depths:
@@ -480,7 +494,7 @@ class Trader:
         if Product.INK in state.order_depths:
             ink_position = state.position[Product.INK] if Product.INK in state.position else 0
             ink_fair_value = self.mm_fair_value(Product.INK, state.order_depths[Product.INK])
-            # ink_fair_value = self.weight_fair_value(Product.INK, state.order_depths)            
+            # ink_fair_value = self.weight_fair_value(state.order_depths[Product.INK])            
 
             ink_orders = self.ink_orders(state.order_depths[Product.INK], ink_fair_value, ink_position)
             result[Product.INK] = ink_orders
@@ -489,15 +503,14 @@ class Trader:
             kelp_position = state.position[Product.KELP] if Product.KELP in state.position else 0
             kelp_fair_value = self.mm_fair_value(Product.KELP, state.order_depths[Product.KELP])
             # kelp_fair_value = self.weight_fair_value(Product.KELP, state.order_depths)
+            # kelp_fair_value = self.ink_fair_value(state.order_depths[Product.KELP])
+
             
             kelp_orders = self.kelp_orders(state.order_depths[Product.KELP], kelp_fair_value, kelp_position)
             result[Product.KELP] = kelp_orders
             
-        if Product.PIC1 in state.order_depths:
-            pic1_position = state.position[Product.pic1] if Product.PIC1 in state.position else 0
-            # kelp_fair_value = self.weight_fair_value(Product.KELP, state.order_depths)
                         
-        traderData = "" # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
+        traderData = jsonpickle.encode(traderObject) # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
         
         conversions = 1
         
