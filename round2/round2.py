@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import string
 import math
 import numpy as np
@@ -140,6 +140,9 @@ class Product:
     DJEMBES = "DJEMBES"
     PIC1 = "PICNIC_BASKET1"
     PIC2 = "PICNIC_BASKET2"
+    SYNTHETIC = "SYNTHEIC"
+    SPREAD1 = "SPREAD1"
+    SPREAD2 = "SPREAD2"
 
 PARAMS = {
     Product.RESIN: {
@@ -157,31 +160,44 @@ PARAMS = {
         "adverse_volume": 20
     },
     Product.PIC1: {
-        "num_croissants": 6,
-        "num_jams": 3,
-        "num_djembes": 1
+        Product.CROISSANTS: 6,
+        Product.JAMS: 3,
+        Product.DJEMBES: 1
     },
     Product.PIC2: {
-        "num_croissants": 4,
-        "num_jams": 2,
-        "num_djembes": 0
+        Product.CROISSANTS: 4,
+        Product.JAMS: 2,
+        Product.DJEMBES: 0
     },
     Product.CROISSANTS: {
         "take_width": 1,
         "prevent_adverse": True,
-        "adverse_volume": 25
+        "adverse_volume": 100
     },
     Product.JAMS: {
         "take_width": 1,
         "prevent_adverse": True,
-        "adverse_volume": 25
+        "adverse_volume": 100
     },
     Product.DJEMBES: {
         "take_width": 1,
         "prevent_adverse": True,
-        "adverse_volume": 25
+        "adverse_volume": 50
+    },
+    Product.SPREAD1: {
+        "default_spread_mean": 50,
+        "spread_std_window": 45,
+        "zscore_threshold": 1.5,
+        "target_position": 55
+    },
+    Product.SPREAD2: {
+        "default_spread_mean": 40,
+        "spread_std_window": 45,
+        "zscore_threshold": 1.5,
+        "target_position": 60
     }
 }
+# 12k -> 0.5
 
 class Trader:
     def __init__(self):
@@ -365,10 +381,12 @@ class Trader:
         if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
             best_ask = min(order_depth.sell_orders.keys())
             best_bid = max(order_depth.buy_orders.keys())
-            
-            filtered_ask = [price for price in order_depth.sell_orders.keys() if abs(order_depth.sell_orders[price]) >= PARAMS[product]["adverse_volume"]]
-            filtered_bid = [price for price in order_depth.buy_orders.keys() if abs(order_depth.buy_orders[price]) >= PARAMS[product]["adverse_volume"]]
-            
+            if "adverse_volume" in PARAMS[product]:
+                filtered_ask = [price for price in order_depth.sell_orders.keys() if abs(order_depth.sell_orders[price]) >= PARAMS[product]["adverse_volume"]]
+                filtered_bid = [price for price in order_depth.buy_orders.keys() if abs(order_depth.buy_orders[price]) >= PARAMS[product]["adverse_volume"]]
+            else:
+                filtered_ask = []
+                filtered_bid = []
             mm_ask = min(filtered_ask) if len(filtered_ask) > 0 else best_ask
             mm_bid = max(filtered_bid) if len(filtered_bid) > 0 else best_bid
             
@@ -479,11 +497,313 @@ class Trader:
         
         return orders
     
+    def croissants_orders(
+        self, 
+        order_depth: OrderDepth, 
+        fair_value: int, 
+        position: int
+    ) -> List[Order]:
+        
+        orders: List[Order] = []
+        if (fair_value == None):
+            return orders
+        buy_order_volume = 0
+        sell_order_volume = 0
+        product = Product.CROISSANTS
+        aaf = [price for price in order_depth.sell_orders.keys() if price > fair_value]
+        bbf = [price for price in order_depth.buy_orders.keys() if price < fair_value]
+        baaf = min(aaf) if len(aaf) > 0 else fair_value + 1
+        bbbf = max(bbf) if len(bbf) > 0 else fair_value - 1
+        
+        best_ask = min(order_depth.sell_orders.keys())
+        best_bid = max(order_depth.buy_orders.keys())
+        volatility = abs(best_ask - best_bid)
+        dynamic_take_width = max(1, volatility * 0.25)
+        
+        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, PARAMS[Product.CROISSANTS]["take_width"], orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
+        buy_order_volume, sell_order_volume = self.clear_position_order(product, fair_value, orders, order_depth, position, buy_order_volume, sell_order_volume)
+        buy_order_volume, sell_order_volume = self.market_make(product, orders, bbbf + 1, baaf - 1, position, buy_order_volume, sell_order_volume)
+        
+        return orders
+    
+    def jams_orders(
+        self, 
+        order_depth: OrderDepth, 
+        fair_value: int, 
+        position: int
+    ) -> List[Order]:
+        
+        orders: List[Order] = []
+        if (fair_value == None):
+            return orders
+        buy_order_volume = 0
+        sell_order_volume = 0
+        product = Product.JAMS
+        aaf = [price for price in order_depth.sell_orders.keys() if price > fair_value]
+        bbf = [price for price in order_depth.buy_orders.keys() if price < fair_value]
+        baaf = min(aaf) if len(aaf) > 0 else fair_value + 1
+        bbbf = max(bbf) if len(bbf) > 0 else fair_value - 1
+        
+        best_ask = min(order_depth.sell_orders.keys())
+        best_bid = max(order_depth.buy_orders.keys())
+        volatility = abs(best_ask - best_bid)
+        dynamic_take_width = max(1, volatility * 0.25)
+        
+        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, PARAMS[Product.JAMS]["take_width"], orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
+        buy_order_volume, sell_order_volume = self.clear_position_order(product, fair_value, orders, order_depth, position, buy_order_volume, sell_order_volume)
+        buy_order_volume, sell_order_volume = self.market_make(product, orders, bbbf + 1, baaf - 1, position, buy_order_volume, sell_order_volume)
+        
+        return orders
+    
+    def djembes_orders(
+        self, 
+        order_depth: OrderDepth, 
+        fair_value: int, 
+        position: int
+    ) -> List[Order]:
+        
+        orders: List[Order] = []
+        if (fair_value == None):
+            return orders
+        buy_order_volume = 0
+        sell_order_volume = 0
+        product = Product.DJEMBES
+        aaf = [price for price in order_depth.sell_orders.keys() if price > fair_value + 1]
+        bbf = [price for price in order_depth.buy_orders.keys() if price < fair_value - 1]
+        baaf = min(aaf) if len(aaf) > 0 else fair_value + 2
+        bbbf = max(bbf) if len(bbf) > 0 else fair_value - 2
+        
+        best_ask = min(order_depth.sell_orders.keys())
+        best_bid = max(order_depth.buy_orders.keys())
+        volatility = abs(best_ask - best_bid)
+        dynamic_take_width = max(1, volatility * 0.25)
+        
+        buy_order_volume, sell_order_volume = self.take_best_orders(product, fair_value, PARAMS[Product.DJEMBES]["take_width"], orders, order_depth, position, buy_order_volume, sell_order_volume, PARAMS[product]["prevent_adverse"], PARAMS[product]["adverse_volume"])
+        buy_order_volume, sell_order_volume = self.clear_position_order(product, fair_value, orders, order_depth, position, buy_order_volume, sell_order_volume)
+        buy_order_volume, sell_order_volume = self.market_make(product, orders, bbbf + 1, baaf - 1, position, buy_order_volume, sell_order_volume)
+        
+        return orders
+    
+    
+    
+    
+    
+    def get_synthetic_basket_order_depth(
+        self, basket_type: str, order_depths: Dict[str, OrderDepth]
+    ) -> OrderDepth:
+        # constants
+        CROISSANTS_PER_BASKET = PARAMS[basket_type][Product.CROISSANTS]
+        JAMS_PER_BASKET = PARAMS[basket_type][Product.JAMS]
+        DJEMBES_PER_BASKET = PARAMS[basket_type][Product.DJEMBES]
+        
+        synthetic_order_prices = OrderDepth()
+        
+        crois_best_bid = (
+            max(order_depths[Product.CROISSANTS].buy_orders.keys())
+            if order_depths[Product.CROISSANTS].buy_orders else 0
+        )
+        
+        crois_best_ask = (
+            min(order_depths[Product.CROISSANTS].sell_orders.keys())
+            if order_depths[Product.CROISSANTS].sell_orders
+            else float ("inf")
+        )
+        
+        jams_best_bid = (
+            max(order_depths[Product.JAMS].buy_orders.keys())
+            if order_depths[Product.JAMS].buy_orders
+            else 0
+        )
+        
+        jams_best_ask = (
+            min(order_depths[Product.JAMS].sell_orders.keys())
+            if order_depths[Product.JAMS].sell_orders
+            else float ("inf")
+        )
+        
+        djembes_best_bid = (
+            max(order_depths[Product.DJEMBES].buy_orders.keys())
+            if order_depths[Product.DJEMBES].buy_orders
+            else 0
+        )
+        
+        djembes_best_ask = (
+            min(order_depths[Product.DJEMBES].sell_orders.keys())
+            if order_depths[Product.DJEMBES].sell_orders
+            else float ("inf")
+        )
+        
+        implied_bid = crois_best_bid * CROISSANTS_PER_BASKET + jams_best_bid * JAMS_PER_BASKET + djembes_best_bid * DJEMBES_PER_BASKET
+        implied_ask = crois_best_ask * CROISSANTS_PER_BASKET + jams_best_ask * JAMS_PER_BASKET + djembes_best_ask * DJEMBES_PER_BASKET
+        
+        if implied_bid > 0:
+            crois_bid_volume = order_depths[Product.CROISSANTS].buy_orders[crois_best_bid] // CROISSANTS_PER_BASKET
+            jams_bid_volume = order_depths[Product.JAMS].buy_orders[jams_best_bid] // JAMS_PER_BASKET
+            djembes_bid_volume = order_depths[Product.DJEMBES].buy_orders[djembes_best_bid] // DJEMBES_PER_BASKET if DJEMBES_PER_BASKET != 0 else float('inf')
+            
+            implied_bid_volume = min(crois_bid_volume, jams_bid_volume, djembes_bid_volume)
+            synthetic_order_prices.buy_orders[implied_bid] = implied_bid_volume
+        
+        if implied_ask < float('inf'):
+            crois_ask_volume = order_depths[Product.CROISSANTS].sell_orders[crois_best_ask] // CROISSANTS_PER_BASKET
+            jams_ask_volume = order_depths[Product.JAMS].sell_orders[jams_best_ask] // JAMS_PER_BASKET
+            djembe_ask_volume = order_depths[Product.DJEMBES].sell_orders[djembes_best_ask] // DJEMBES_PER_BASKET if DJEMBES_PER_BASKET != 0 else 0
+            
+            implied_ask_volume = max(crois_ask_volume, jams_ask_volume, djembe_ask_volume)
+            synthetic_order_prices.sell_orders[implied_ask] = implied_ask_volume
+            
+        return synthetic_order_prices
+    
+    def convert_synthetic_basket_orders(
+        self, basket_type: str, synthetic_orders: List[Order], order_depths: Dict[str, OrderDepth]
+    ) -> Dict[str, List[Order]]:
+        component_orders = {
+            Product.CROISSANTS: [],
+            Product.JAMS: [],
+            Product.DJEMBES: []
+        }
+        
+        synthetic_basket_order_depth = self.get_synthetic_basket_order_depth(basket_type, order_depths)
+        best_bid = max(synthetic_basket_order_depth.buy_orders.keys()) if synthetic_basket_order_depth.buy_orders else 0
+        best_ask = min(synthetic_basket_order_depth.sell_orders.keys()) if synthetic_basket_order_depth.sell_orders else float('inf')
+        
+        for order in synthetic_orders:
+            price = order.price
+            quantity = order.quantity
+            
+            if quantity > 0 and price >= best_ask:
+                crois_price = min(order_depths[Product.CROISSANTS].sell_orders.keys())
+                jams_price = min(order_depths[Product.JAMS].sell_orders.keys())
+                djembes_price = min(order_depths[Product.DJEMBES].sell_orders.keys())
+                
+            elif quantity < 0 and price <= best_bid:
+                crois_price = max(order_depths[Product.CROISSANTS].buy_orders.keys())
+                jams_price = max(order_depths[Product.JAMS].buy_orders.keys())
+                djembes_price = max(order_depths[Product.DJEMBES].buy_orders.keys())
+            else:
+                continue
+            
+            crois_order = Order(Product.CROISSANTS, crois_price, quantity * PARAMS[basket_type][Product.CROISSANTS])
+            jams_order = Order(Product.JAMS, jams_price, quantity * PARAMS[basket_type][Product.JAMS])
+            djembes_order = Order(Product.DJEMBES, djembes_price, quantity * PARAMS[basket_type][Product.DJEMBES])
+            
+            component_orders[Product.CROISSANTS].append(crois_order)
+            component_orders[Product.JAMS].append(jams_order)
+            component_orders[Product.DJEMBES].append(djembes_order)
+        
+        return component_orders
+    
+    def execute_spread_orders(
+        self, 
+        basket_type: str,
+        target_position: int,
+        basket_position: int,
+        order_depths: Dict[str, OrderDepth]
+    ):
+        if target_position == basket_position:
+            return None
+        
+        target_quantity = abs(target_position - basket_position)
+        basket_order_depth = order_depths[basket_type]
+        synthetic_order_depth = self.get_synthetic_basket_order_depth(basket_type, order_depths)
+        
+        if target_position > basket_position:
+            basket_ask_price = min(basket_order_depth.sell_orders.keys())
+            basket_ask_volume = abs(basket_order_depth.sell_orders[basket_ask_price])
+            
+            synthetic_bid_price = max(synthetic_order_depth.buy_orders.keys())
+            synthetic_bid_volume = abs(synthetic_order_depth.buy_orders[synthetic_bid_price])
+            
+            orderbook_volume = min(basket_ask_volume, synthetic_bid_volume)
+            execute_volume = min(orderbook_volume, target_quantity)
+            
+            basket_orders = [Order(basket_type, basket_ask_price, execute_volume)]
+            synthetic_orders = [Order(Product.SYNTHETIC, synthetic_bid_price, -execute_volume)]
+            
+            aggregate_orders = self.convert_synthetic_basket_orders(basket_type, synthetic_orders, order_depths)
+            aggregate_orders[basket_type] = basket_orders
+            return aggregate_orders
+        else:
+            basket_bid_price = max(basket_order_depth.buy_orders.keys())
+            basket_bid_volume = abs(basket_order_depth.buy_orders[basket_bid_price])
+            
+            synthetic_ask_price = min(synthetic_order_depth.sell_orders.keys())
+            synthetic_ask_volume = abs(synthetic_order_depth.sell_orders[synthetic_ask_price])
+            
+            orderbook_volume = min(basket_bid_volume, synthetic_ask_volume)
+            execute_volume = min(orderbook_volume, target_quantity)
+            
+            basket_orders=  [Order(basket_type, basket_bid_price, -execute_volume)]
+            synthetic_orders = [Order(Product.SYNTHETIC, synthetic_ask_price, execute_volume)]
+            
+            aggregate_orders = self.convert_synthetic_basket_orders(basket_type, synthetic_orders, order_depths)
+            aggregate_orders[basket_type] = basket_orders
+            return aggregate_orders
+        
+    def get_swmid(self, order_depth) -> float:
+        best_bid = max(order_depth.buy_orders.keys())
+        best_ask = min(order_depth.sell_orders.keys())
+        best_bid_vol = abs(order_depth.buy_orders[best_bid])
+        best_ask_vol = abs(order_depth.sell_orders[best_ask])
+        if (best_ask_vol + best_bid_vol == 0):
+            return (best_bid + best_ask) / 2
+        return (best_bid * best_ask_vol + best_ask * best_bid_vol) / (best_ask_vol + best_bid_vol)
+    
+    def spread_orders(
+        self,
+        state: TradingState,
+        order_depths: Dict[str, OrderDepth],
+        basket_type: str,
+        basket_position: int,
+        spread_data: Dict[str, Any]        
+    ):
+        if basket_type not in order_depths.keys():
+            return None
+        
+        basket_order_depth = order_depths[basket_type]
+        synthetic_order_depth = self.get_synthetic_basket_order_depth(basket_type, order_depths)
+        basket_swmid = self.get_swmid(basket_order_depth)
+        synthetic_swmid = self.get_swmid(synthetic_order_depth)
+        spread = basket_swmid - synthetic_swmid
+        spread_data["spread_history"].append(spread)
+        spread_type = ""
+        if (basket_type == Product.PIC1):
+            spread_type = Product.SPREAD1
+        elif (basket_type == Product.PIC2):
+            spread_type = Product.SPREAD2
+        
+        if (len(spread_data["spread_history"]) < PARAMS[spread_type]["spread_std_window"]):
+            return None
+        elif len(spread_data["spread_history"]) > PARAMS[spread_type]["spread_std_window"]:
+            spread_data["spread_history"].pop(0)
+        
+        zscore = 0
+        spread_std = np.std(spread_data["spread_history"])
+        spread_mean = np.mean(spread_data["spread_history"])
+        if (basket_type == Product.PIC1):
+            zscore = (spread - PARAMS[spread_type]["default_spread_mean"]) / spread_std
+        elif (basket_type == Product.PIC2):
+            zscore = (spread - spread_mean) / spread_std
+                
+        if zscore >= PARAMS[spread_type]["zscore_threshold"]:
+            if basket_position != -PARAMS[spread_type]["target_position"]:
+                return self.execute_spread_orders(basket_type, -PARAMS[spread_type]["target_position"], basket_position, order_depths)
+        
+        if zscore <= -PARAMS[spread_type]["zscore_threshold"]:
+            if basket_position != PARAMS[spread_type]["target_position"]:
+                return self.execute_spread_orders(basket_type, PARAMS[spread_type]["target_position"], basket_position, order_depths)
+                
+        spread_data["prev_zscore"] = zscore
+        return None
+    
+    
     def run(self, state: TradingState):
         traderObject = {}
         if state.traderData != None and state.traderData != "":
             traderObject = jsonpickle.decode(state.traderData)
         result = {}
+        conversions = 0
+        
         
         if Product.RESIN in state.order_depths:
             resin_position = state.position[Product.RESIN] if Product.RESIN in state.position else 0
@@ -509,11 +829,62 @@ class Trader:
             kelp_orders = self.kelp_orders(state.order_depths[Product.KELP], kelp_fair_value, kelp_position)
             result[Product.KELP] = kelp_orders
             
-                        
+        if Product.SPREAD1 not in traderObject:
+            traderObject[Product.SPREAD1] = {
+                "spread_history": [],
+                "prev_zscore": 0,
+                "clear_flag": False,
+                "curr_avg": 0
+            }
+        if Product.SPREAD2 not in traderObject:
+            traderObject[Product.SPREAD2] = {
+                "spread_history": [],
+                "prev_zscore": 0,
+                "clear_flag": False,
+                "curr_avg": 0
+            }
+
+        pic2_position = state.position[Product.PIC2] if Product.PIC2 in state.position else 0        
+        pic1_position = state.position[Product.PIC1] if Product.PIC1 in state.position else 0
+
+        pic1_spread_orders = self.spread_orders(state, state.order_depths, Product.PIC1, pic1_position, traderObject[Product.SPREAD1])
+        pic2_spread_orders = self.spread_orders(state, state.order_depths, Product.PIC2, pic2_position, traderObject[Product.SPREAD2])       
+        result[Product.CROISSANTS] = []
+        result[Product.JAMS] = []
+        result[Product.DJEMBES] = [] 
+        if pic1_spread_orders != None:
+            result[Product.CROISSANTS].extend(pic1_spread_orders[Product.CROISSANTS])
+            result[Product.JAMS].extend(pic1_spread_orders[Product.JAMS])
+            result[Product.DJEMBES].extend(pic1_spread_orders[Product.DJEMBES])
+            result[Product.PIC1] = pic1_spread_orders[Product.PIC1]
+        if pic2_spread_orders != None:
+            result[Product.CROISSANTS].extend(pic2_spread_orders[Product.CROISSANTS])
+            result[Product.JAMS].extend(pic2_spread_orders[Product.JAMS])
+            result[Product.DJEMBES].extend(pic2_spread_orders[Product.DJEMBES])
+            result[Product.PIC2] = pic2_spread_orders[Product.PIC2]
+
+        '''
+        if Product.CROISSANTS in state.order_depths:
+            croissant_position = state.position[Product.CROISSANTS] if Product.CROISSANTS in state.position else 0
+            croissant_fair_value = self.mm_fair_value(Product.CROISSANTS, state.order_depths[Product.CROISSANTS])
+            croissant_orders = self.croissants_orders(state.order_depths[Product.CROISSANTS], croissant_fair_value, croissant_position)
+            result[Product.CROISSANTS].extend(croissant_orders)
+        
+        if Product.JAMS in state.order_depths:
+            jam_position = state.position[Product.JAMS] if Product.JAMS in state.position else 0
+            jam_fair_value = self.mm_fair_value(Product.JAMS, state.order_depths[Product.JAMS])
+            jam_orders= self.jams_orders(state.order_depths[Product.JAMS], jam_fair_value, jam_position)
+            result[Product.JAMS].extend(jam_orders)
+            
+        if Product.DJEMBES in state.order_depths:
+            djembes_position = state.position[Product.DJEMBES] if Product.DJEMBES in state.position else 0
+            djembes_fair_value = self.mm_fair_value(Product.DJEMBES, state.order_depths[Product.DJEMBES])
+            djembes_orders= self.djembes_orders(state.order_depths[Product.DJEMBES], djembes_fair_value, djembes_position)
+            result[Product.DJEMBES].extend(djembes_orders)
+        '''
+                       
         traderData = jsonpickle.encode(traderObject) # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
-        
-        conversions = 1
-        
+                
         logger.flush(state, result, conversions, traderData)
         
         return result, conversions, traderData
