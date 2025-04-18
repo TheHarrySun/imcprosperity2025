@@ -381,12 +381,10 @@ class Trader:
         if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
             best_ask = min(order_depth.sell_orders.keys())
             best_bid = max(order_depth.buy_orders.keys())
-            if "adverse_volume" in PARAMS[product]:
-                filtered_ask = [price for price in order_depth.sell_orders.keys() if abs(order_depth.sell_orders[price]) >= PARAMS[product]["adverse_volume"]]
-                filtered_bid = [price for price in order_depth.buy_orders.keys() if abs(order_depth.buy_orders[price]) >= PARAMS[product]["adverse_volume"]]
-            else:
-                filtered_ask = []
-                filtered_bid = []
+            
+            filtered_ask = [price for price in order_depth.sell_orders.keys() if abs(order_depth.sell_orders[price]) >= PARAMS[product]["adverse_volume"]]
+            filtered_bid = [price for price in order_depth.buy_orders.keys() if abs(order_depth.buy_orders[price]) >= PARAMS[product]["adverse_volume"]]
+            
             mm_ask = min(filtered_ask) if len(filtered_ask) > 0 else best_ask
             mm_bid = max(filtered_bid) if len(filtered_bid) > 0 else best_bid
             
@@ -751,7 +749,6 @@ class Trader:
     
     def spread_orders(
         self,
-        state: TradingState,
         order_depths: Dict[str, OrderDepth],
         basket_type: str,
         basket_position: int,
@@ -847,8 +844,8 @@ class Trader:
         pic2_position = state.position[Product.PIC2] if Product.PIC2 in state.position else 0        
         pic1_position = state.position[Product.PIC1] if Product.PIC1 in state.position else 0
 
-        pic1_spread_orders = self.spread_orders(state, state.order_depths, Product.PIC1, pic1_position, traderObject[Product.SPREAD1])
-        pic2_spread_orders = self.spread_orders(state, state.order_depths, Product.PIC2, pic2_position, traderObject[Product.SPREAD2])       
+        pic1_spread_orders = self.spread_orders(state.order_depths, Product.PIC1, pic1_position, traderObject[Product.SPREAD1])
+        pic2_spread_orders = self.spread_orders(state.order_depths, Product.PIC2, pic2_position, traderObject[Product.SPREAD2])       
         result[Product.CROISSANTS] = []
         result[Product.JAMS] = []
         result[Product.DJEMBES] = [] 
