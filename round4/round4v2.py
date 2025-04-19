@@ -256,7 +256,13 @@ PARAMS = {
         "volume_bar": 100,
         "dec_edge_discount": 0.9,
         "step_size": 0.5,
-        "csi" : 30
+        "csi" : 29,
+        "sunlight_weight": 0.9260,
+        "sugar_weight": 10.1435,
+        "intercept": -1407.3115,
+        "normal_edge": 0.5,
+        "panic_edge": 0.5,
+        "conversion_threshold": 0.5
     }
 }
 # 12k -> 0.5
@@ -1169,6 +1175,94 @@ class Trader:
             
         return orders, buy_order_volume, sell_order_volume
             
+    def macaron_fair_value(self, obs: ConversionObservation, traderObject: Dict[str, int]) -> float:
+        sunlight = obs.sunlightIndex
+        sugar = obs.sugarPrice
+        
+        csi = PARAMS[Product.MACARON]["csi"]
+        sunlight_weight = PARAMS[Product.MACARON]["sunlight_weight"]
+        sugar_weight = PARAMS[Product.MACARON]["sugar_weight"]
+        
+        if sunlight < csi:
+            fair_price = sunlight * sunlight_weight + sugar * sugar_weight + PARAMS[Product.MACARON]["intercept"]
+            return fair_price
+        else:
+            bid = obs.bidPrice - obs.exportTariff - obs.transportFees
+            ask = obs.askPrice + obs.importTariff + obs.transportFees
+            traderObject["prev_fairprices"].append((bid + ask) / 2)
+            if len(traderObject["prev_fairprices"]) < 100:
+                return (bid + ask) / 2
+            else:
+                return np.array(traderObject["prev_fairprices"]).mean()
+        
+    def macaron_regime_trade(
+        self, 
+        order_depth: OrderDepth,
+        observation: ConversionObservation,
+        position: int,
+        traderObject: dict
+    ) -> Tuple[List[Order], float, int]:
+        orders = []
+        sunlight = observation.sunlightIndex
+        position_limit = self.LIMIT[Product.MACARON]
+        
+        best_bid = max(order_depth.buy_orders.keys(), default = None)
+        best_ask = min(order_depth.sell_orders.keys(), default = None)
+        
+        csi = PARAMS[Product.MACARON]["csi"]
+        fair_value = self.macaron_fair_value(observation, traderObject)
+        if sunlight < csi:
+            edge = PARAMS[Product.MACARON]["panic_edge"]
+        else:
+            edge = PARAMS[Product.MACARON]["normal_edge"]
+            
+        if best_ask is not None and best_ask < fair_value - edge:
+            qty = min(position_limit - position, abs(order_depth.sell_orders[best_ask]))
+            if qty > 0:
+                orders.append(Order(Product.MACARON, best_ask, qty))
+                order_depth.sell_orders[best_ask] += qty
+                if (order_depth.sell_orders[best_ask] == 0):
+                    del order_depth.sell_orders[best_ask]
+        if best_bid is not None and best_bid > fair_value + edge:
+            qty = min(position_limit + position, abs(order_depth.buy_orders[best_bid]))
+            if qty > 0:
+                orders.append(Order(Product.MACARON, best_bid, -qty))
+                order_depth.buy_orders[best_bid] -= qty
+                if (order_depth.buy_orders[best_bid] == 0):
+                    del order_depth.buy_orders[best_bid]
+
+    
+        make_bid = round(fair_value - edge)
+        make_ask = round(fair_value + edge)
+            
+        if position < position_limit:
+            orders.append(Order(Product.MACARON, make_bid, position_limit - position))
+        if position > -position_limit:
+            orders.append(Order(Product.MACARON, make_ask, -(position + position_limit)))
+            
+        return orders, fair_value, edge
+    
+    def macaron_conversion_decision(
+        self,
+        position: int,
+        observation: ConversionObservation,
+        fair_value: float
+    ) -> int:
+        if position == 0:
+            return 0
+        
+        if position > 0:
+            conv_price = observation.bidPrice - observation.exportTariff - observation.transportFees
+            profit = conv_price - fair_value
+        else:
+            conv_price = observation.askPrice + observation.importTariff + observation.transportFees
+            profit = fair_value - conv_price
+        
+        if profit > PARAMS[Product.MACARON]["conversion_threshold"]:
+            return -min(abs(position), self.CONVLIMIT[Product.MACARON])
+        else:
+            return 0
+    
     def run(self, state: TradingState):
         traderObject = {}
         if state.traderData != None and state.traderData != "":
@@ -1351,6 +1445,8 @@ class Trader:
             if rock_orders:
                 result[Product.ROCK] = rock_orders
         
+        
+        '''
         sunlightindex = state.observations.conversionObservations[Product.MACARON].sunlightIndex
         if sunlightindex > PARAMS[Product.MACARON]["csi"]:
             if Product.MACARON in state.order_depths:
@@ -1387,6 +1483,23 @@ class Trader:
                 result[Product.MACARON] = macaron_take_orders + macaron_make_orders
         else:
             conversions = 10
+        '''
+        
+        if Product.MACARON not in traderObject:
+            traderObject[Product.MACARON] = {"prev_fairprices": []}
+        
+        if Product.MACARON in state.order_depths:
+            macaron_position = state.position[Product.MACARON] if Product.MACARON in state.position else 0
+            obs = state.observations.conversionObservations[Product.MACARON]
+            order_depth = state.order_depths[Product.MACARON]
+            
+            orders, fair_value, edge = self.macaron_regime_trade(order_depth, obs, macaron_position, traderObject[Product.MACARON])
+            result[Product.MACARON] = orders
+            
+            conversions = self.macaron_conversion_decision(macaron_position, obs, fair_value)    
+        
+        if len(traderObject[Product.MACARON]["prev_fairprices"]) > 100:
+            traderObject[Product.MACARON]["prev_fairprices"].pop(0)
         
         traderData = jsonpickle.encode(traderObject) # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
                 

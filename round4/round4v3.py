@@ -225,7 +225,7 @@ PARAMS = {
     Product.COUPON_10000: {
         "mean_vol": 0.02190607,
         "strike": 10000,
-        "starting_time_to_expiry": 2 / 7,
+        "starting_time_to_expiry": 3 / 7,
         "std_window": 6,
         "zscore_threshold": 20,
         "edge_threshold": 1.5
@@ -233,7 +233,7 @@ PARAMS = {
     Product.COUPON_10250: {
         "mean_vol": 0.0204700,
         "strike": 10250,
-        "starting_time_to_expiry": 2 / 7,
+        "starting_time_to_expiry": 3 / 7,
         "std_window": 6,
         "zscore_threshold": 20,
         "edge_threshold": 1.5
@@ -241,7 +241,7 @@ PARAMS = {
     Product.COUPON_10500: {
         "mean_vol": 0.020823,
         "strike": 10500,
-        "starting_time_to_expiry": 2 / 7,
+        "starting_time_to_expiry": 3 / 7,
         "std_window": 6,
         "zscore_threshold": 20,
         "edge_threshold": 1.5
@@ -256,7 +256,15 @@ PARAMS = {
         "volume_bar": 100,
         "dec_edge_discount": 0.9,
         "step_size": 0.5,
-        "csi" : 30
+        "csi" : 29,
+        "sunlight_weight": 0.9260,
+        "sugar_weight": 10.1435,
+        "intercept": -1407.3115,
+        "normal_edge": 0.5,
+        "panic_edge": 0.5,
+        "conversion_threshold": 0.8,
+        "std_window": 3,
+        "adverse_volume": 30
     }
 }
 # 12k -> 0.5
@@ -1169,13 +1177,107 @@ class Trader:
             
         return orders, buy_order_volume, sell_order_volume
             
+    def macaron_fair_value(self, obs: ConversionObservation, traderObject: Dict[str, int]) -> float:
+        sunlight = obs.sunlightIndex
+        sugar = obs.sugarPrice
+        
+        csi = PARAMS[Product.MACARON]["csi"]
+        sunlight_weight = PARAMS[Product.MACARON]["sunlight_weight"]
+        sugar_weight = PARAMS[Product.MACARON]["sugar_weight"]
+        
+        
+        if sunlight < csi:
+            fair_price = sunlight * sunlight_weight + sugar * sugar_weight + PARAMS[Product.MACARON]["intercept"]
+            return fair_price
+        else:
+            bid = obs.bidPrice - obs.exportTariff - obs.transportFees
+            ask = obs.askPrice + obs.importTariff + obs.transportFees
+            traderObject["prev_fairprices"].append((bid + ask) / 2)
+            if len(traderObject["prev_fairprices"]) < PARAMS[Product.MACARON]["std_window"]:
+                return (bid + ask) / 2
+            else:
+                return np.array(traderObject["prev_fairprices"]).mean()
+        
+    def macaron_regime_trade(
+        self, 
+        order_depth: OrderDepth,
+        observation: ConversionObservation,
+        position: int,
+        traderObject: dict
+    ) -> Tuple[List[Order], float, int]:
+        orders = []
+        sunlight = observation.sunlightIndex
+        position_limit = self.LIMIT[Product.MACARON]
+        
+        best_bid = max(order_depth.buy_orders.keys(), default = None)
+        best_ask = min(order_depth.sell_orders.keys(), default = None)
+        
+        buy_order_volume = 0
+        sell_order_volume = 0
+        
+        csi = PARAMS[Product.MACARON]["csi"]
+        fair_value = self.macaron_fair_value(observation, traderObject)
+        if sunlight < csi:
+            edge = PARAMS[Product.MACARON]["panic_edge"]
+        else:
+            edge = PARAMS[Product.MACARON]["normal_edge"]
+            
+        if best_ask is not None and best_ask < fair_value - edge:
+            qty = min(position_limit - position, abs(order_depth.sell_orders[best_ask]), PARAMS[Product.MACARON]["adverse_volume"])
+            if qty > 0:
+                orders.append(Order(Product.MACARON, best_ask, qty))
+                buy_order_volume += qty
+        if best_bid is not None and best_bid > fair_value + edge:
+            qty = min(position_limit + position, abs(order_depth.buy_orders[best_bid]), PARAMS[Product.MACARON]["adverse_volume"])
+            if qty > 0:
+                orders.append(Order(Product.MACARON, best_bid, -qty))
+                sell_order_volume += qty
+                
+        make_bid = round(fair_value - edge)
+        make_ask = round(fair_value + edge)
+            
+        temp_position = position + buy_order_volume - sell_order_volume
+        if temp_position < position_limit:
+            qty = min(position_limit - temp_position, PARAMS[Product.MACARON]["adverse_volume"])
+            orders.append(Order(Product.MACARON, make_bid, qty))
+            buy_order_volume += qty
+        if temp_position > -position_limit:
+            qty = max(-(position + position_limit), -PARAMS[Product.MACARON]["adverse_volume"])
+            orders.append(Order(Product.MACARON, make_ask, qty))
+            sell_order_volume += qty
+            
+        return orders, fair_value
+    
+    def macaron_conversion_decision(
+        self,
+        position: int,
+        observation: ConversionObservation,
+        fair_value: float
+    ) -> int:
+        if position == 0:
+            return 0
+        
+        if position > 0:
+            conv_price = observation.bidPrice - observation.exportTariff - observation.transportFees
+            profit = conv_price - fair_value
+        else:
+            conv_price = observation.askPrice + observation.importTariff + observation.transportFees
+            profit = fair_value - conv_price
+        
+        if profit > PARAMS[Product.MACARON]["conversion_threshold"]:
+            if position > 0:
+                return -min(abs(position), self.CONVLIMIT[Product.MACARON])
+            else:
+                return min(abs(position), self.CONVLIMIT[Product.MACARON])
+        else:
+            return 0
+    
     def run(self, state: TradingState):
         traderObject = {}
         if state.traderData != None and state.traderData != "":
             traderObject = jsonpickle.decode(state.traderData)
         result = {}
         conversions = 0
-        
         
         if Product.RESIN in state.order_depths:
             resin_position = state.position[Product.RESIN] if Product.RESIN in state.position else 0
@@ -1241,63 +1343,7 @@ class Trader:
             result[Product.JAMS].extend(pic2_spread_orders[Product.JAMS])
             result[Product.DJEMBES].extend(pic2_spread_orders[Product.DJEMBES])
             result[Product.PIC2] = pic2_spread_orders[Product.PIC2]
-        '''
-        if Product.CROISSANTS in state.order_depths:
-            croissant_position = state.position[Product.CROISSANTS] if Product.CROISSANTS in state.position else 0
-            croissant_fair_value = self.mm_fair_value(Product.CROISSANTS, state.order_depths[Product.CROISSANTS])
-            croissant_orders = self.croissants_orders(state.order_depths[Product.CROISSANTS], croissant_fair_value, croissant_position)
-            result[Product.CROISSANTS].extend(croissant_orders)
-        
-        if Product.JAMS in state.order_depths:
-            jam_position = state.position[Product.JAMS] if Product.JAMS in state.position else 0
-            jam_fair_value = self.mm_fair_value(Product.JAMS, state.order_depths[Product.JAMS])
-            jam_orders= self.jams_orders(state.order_depths[Product.JAMS], jam_fair_value, jam_position)
-            result[Product.JAMS].extend(jam_orders)
-            
-        if Product.DJEMBES in state.order_depths:
-            djembes_position = state.position[Product.DJEMBES] if Product.DJEMBES in state.position else 0
-            djembes_fair_value = self.mm_fair_value(Product.DJEMBES, state.order_depths[Product.DJEMBES])
-            djembes_orders= self.djembes_orders(state.order_depths[Product.DJEMBES], djembes_fair_value, djembes_position)
-            result[Product.DJEMBES].extend(djembes_orders)
-        '''         
-        
-        '''
-        vouchers = [Product.COUPON_9500, Product.COUPON_9750, Product.COUPON_10000, Product.COUPON_10250, Product.COUPON_10500]
-        
-        for coupon in vouchers:
-            if coupon not in traderObject:
-                traderObject[coupon] = {
-                    "prev_coupon_price": 0,
-                    "past_coupon_vol": []
-                }
-            
-            if coupon in state.order_depths:
-                coupon_position = state.position[coupon] if coupon in state.position else 0
-                rock_position = state.position[Product.ROCK] if Product.ROCK in state.position else 0
-                
-                rock_order_depth = state.order_depths[Product.ROCK]
-                coupon_order_depth = state.order_depths[coupon]
-                
-                rock_mid_price = (min(rock_order_depth.buy_orders.keys()) + max(rock_order_depth.sell_orders.keys())) / 2
-                coupon_mid_price = self.get_coupon_mid_price(coupon_order_depth, traderObject[coupon])
-                tte = PARAMS[coupon]["starting_time_to_expiry"] - (state.timestamp) / 1000000 / 250
-                
-                volatility = BlackScholes.implied_volatility(coupon_mid_price, rock_mid_price, PARAMS[coupon]["strike"], tte)
-                delta = BlackScholes.delta(rock_mid_price, PARAMS[coupon]["strike"], tte, volatility)
-                
-                coupon_take_orders, coupon_make_orders = self.coupon_orders(coupon, coupon_order_depth, coupon_position, traderObject[coupon], volatility)
-                
-                rock_orders = self.rock_hedge_orders(rock_order_depth, coupon_order_depth, coupon_take_orders, rock_position, coupon_position, delta)
-                
-                if coupon_take_orders != None or coupon_make_orders != None:
-                    result[coupon] = coupon_take_orders + coupon_make_orders
-                    
-                if rock_orders != None:
-                    if (Product.ROCK not in result):
-                        result[Product.ROCK] = rock_orders
-                    else:
-                        result[Product.ROCK] += rock_orders
-        '''
+
         
         vouchers = [Product.COUPON_9500, Product.COUPON_9750, Product.COUPON_10000, Product.COUPON_10250, Product.COUPON_10500]
         rock_order_depth = state.order_depths[Product.ROCK]
@@ -1351,42 +1397,22 @@ class Trader:
             if rock_orders:
                 result[Product.ROCK] = rock_orders
         
-        sunlightindex = state.observations.conversionObservations[Product.MACARON].sunlightIndex
-        if sunlightindex > PARAMS[Product.MACARON]["csi"]:
-            if Product.MACARON in state.order_depths:
-                if Product.MACARON not in traderObject:
-                    traderObject[Product.MACARON] = {"curr_edge": PARAMS[Product.MACARON]["init_make_edge"], "volume_history": [], "optimized": False}
+                
+        if Product.MACARON not in traderObject:
+            traderObject[Product.MACARON] = {"prev_fairprices": []}
+        
+        if Product.MACARON in state.order_depths:
+            macaron_position = state.position[Product.MACARON] if Product.MACARON in state.position else 0
+            obs = state.observations.conversionObservations[Product.MACARON]
+            order_depth = state.order_depths[Product.MACARON]
             
-                macaron_position = state.position[Product.MACARON] if Product.MACARON in state.position else 0
-                conversions = self.macaron_arb_clear(macaron_position)
-                if (conversions > self.CONVLIMIT[Product.MACARON]):
-                    conversions = self.CONVLIMIT[Product.MACARON]
-                elif (conversions < -self.CONVLIMIT[Product.MACARON]):
-                    conversions = -self.CONVLIMIT[Product.MACARON]
-                
-                adap_edge = self.macaron_adap_edge(state.timestamp, traderObject[Product.MACARON]["curr_edge"], macaron_position, traderObject)
-                
-                macaron_position = 0
-                
-                macaron_take_orders, buy_order_volume, sell_order_volume = self.macaron_arb_take(
-                    state.order_depths[Product.MACARON],
-                    state.observations.conversionObservations[Product.MACARON],
-                    adap_edge,
-                    macaron_position
-                )
-                
-                macaron_make_orders, _, _ = self.macaron_arb_make(
-                    state.order_depths[Product.MACARON],
-                    state.observations.conversionObservations[Product.MACARON],
-                    macaron_position,
-                    adap_edge,
-                    buy_order_volume,
-                    sell_order_volume
-                )
-                
-                result[Product.MACARON] = macaron_take_orders + macaron_make_orders
-        else:
-            conversions = 10
+            orders, fair_value = self.macaron_regime_trade(order_depth, obs, macaron_position, traderObject[Product.MACARON])
+            result[Product.MACARON] = orders
+            conversions = self.macaron_conversion_decision(macaron_position, obs, fair_value)
+
+                    
+        if len(traderObject[Product.MACARON]["prev_fairprices"]) > PARAMS[Product.MACARON]["std_window"]:
+            traderObject[Product.MACARON]["prev_fairprices"].pop(0)
         
         traderData = jsonpickle.encode(traderObject) # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
                 
