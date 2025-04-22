@@ -1397,7 +1397,7 @@ class Trader:
             if rock_orders:
                 result[Product.ROCK] = rock_orders
         
-                
+        '''
         if Product.MACARON not in traderObject:
             traderObject[Product.MACARON] = {"prev_fairprices": []}
         
@@ -1413,6 +1413,7 @@ class Trader:
                     
         if len(traderObject[Product.MACARON]["prev_fairprices"]) > PARAMS[Product.MACARON]["std_window"]:
             traderObject[Product.MACARON]["prev_fairprices"].pop(0)
+        '''
         
         traderData = jsonpickle.encode(traderObject) # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
                 
